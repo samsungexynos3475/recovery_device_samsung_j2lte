@@ -9,6 +9,4 @@ PRODUCT_MAKEFILES := \
     $(LOCAL_DIR)/omni_j2lte.mk
 
 COMMON_LUNCH_CHOICES := \
-    omni_j2lte-user \
-    omni_j2lte-userdebug \
     omni_j2lte-eng
