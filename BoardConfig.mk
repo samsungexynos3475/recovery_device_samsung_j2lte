@@ -86,3 +86,13 @@ TW_USE_TOOLBOX := true
 # Samsung Bootloader
 TW_NO_REBOOT_BOOTLOADER := true
 TW_HAS_DOWNLOAD_MODE := true
+
+# LZMA Compression
+LZMA_RAMDISK_TARGETS := recovery
+TARGET_USES_LZMA := true
+
+# Remove extra features
+TW_EXCLUDE_PYTHON := true
+TW_EXCLUDE_BASH := true
+TW_INCLUDE_CRYPTO := false
+TW_EXCLUDE_DEFAULT_USB_INIT := true
