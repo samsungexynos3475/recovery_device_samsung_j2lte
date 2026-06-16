@@ -75,6 +75,7 @@ PLATFORM_VERSION := 16.1.0
 TW_THEME := portrait_hdpi
 TW_EXTRA_LANGUAGES := true
 TW_DEVICE_VERSION := lavenly
+TW_DISABLE_CHARGING_PATH := "/sys/class/power_supply/battery/charging_enabled"
 RECOVERY_SDCARD_ON_DATA := true
 BOARD_HAS_NO_REAL_SDCARD := true
 RECOVERY_GRAPHICS_USE_LINELENGTH := true
