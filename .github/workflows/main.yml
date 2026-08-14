@@ -1,0 +1,174 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'MANIFEST_BRANCH'
+        required: true
+        default: 'twrp-9.0'
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
+        required: true
+        default: 'https://github.com/samsungexynos3475/recovery_device_samsung_j2lte'
+      DEVICE_TREE_BRANCH:
+        description: 'DEVICE_TREE_BRANCH'
+        required: true
+        default: 'twrp-9.0'
+      NAME:
+        description: 'NAME'
+        required: true
+        default: 'twrp-3.7.0_9-lavenly'
+      FILE_NAME:
+        description: 'FILE_NAME'
+        required: true
+        default: 'twrp-3.7.0_9-lavenly-j2lte'
+      DEVICE_PATH:
+        description: 'DEVICE_PATH'
+        required: true
+        default: 'device/samsung/j2lte'
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        required: true
+        default: 'j2lte'
+      MAKEFILE_NAME:
+        description: 'MAKEFILE_NAME'
+        required: true
+        default: 'omni_j2lte'
+      BUILD_TARGET:
+        description: 'BUILD_TARGET'
+        required: true
+        default: 'recovery'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - name: Display Run Parameters
+      run: |
+        echo "::group::User Environment Variables"
+        echo "Manifest: minimal-manifest-twrp/platform_manifest_twrp_omni"
+        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "::endgroup::"
+
+    - name: Check Out
+      uses: actions/checkout@v4
+
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
+
+    - name: Prepare the environment
+      run: |
+        sudo apt update && sudo apt upgrade -y
+        # 1. Install 24.04 equivalent packages (notice libncurses-dev, libwxgtk3.2-dev, libsdl1.2-compat-dev)
+        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+            linux-modules-extra-$(uname -r) \
+            gperf gcc-multilib g++-multilib \
+            libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-compat-dev \
+            libwxgtk3.2-dev libxml2 lzop pngcrush schedtool squashfs-tools \
+            imagemagick libbz2-dev lzma ncftp qemu-user-static python3 tar
+
+    - name: Install OpenJDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '11'
+
+    - name: Install repo
+      run: |
+        mkdir ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+
+    - name: Initialize repo
+      run: |
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+        git config --global user.name "${GITHUB_ACTOR}"
+        git config --global user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+        repo init --depth=1 -u https://github.com/samsungexynos3475/platform_manifest_twrp_omni -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+      id: pwd
+
+    - name: Repo Sync
+      run: |
+        repo sync -j$(nproc --all) --no-clone-bundle --no-tags --optimized-fetch --prune
+      working-directory: workspace
+
+    - name: Clone device tree
+      run: |
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Set Build Tree
+      id: buildtree
+      run: |
+        echo "value=$(echo ${{ github.event.inputs.MAKEFILE_NAME }} | cut -d'_' -f1)" >> $GITHUB_OUTPUT
+        echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+
+    - name: Sync Device Dependencies
+      run: |
+        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
+        repo sync -j$(nproc --all) --no-clone-bundle --no-tags --optimized-fetch --prune
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+      continue-on-error: true
+
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+
+    - name: Install legacy dependencies (Python 2 & ncurses5)
+      run: |
+        # Add the 22.04 (Jammy) repositories temporarily
+        echo "deb http://archive.ubuntu.com/ubuntu/ jammy universe" | sudo tee /etc/apt/sources.list.d/jammy.list
+        echo "deb http://archive.ubuntu.com/ubuntu/ jammy-updates universe" | sudo tee -a /etc/apt/sources.list.d/jammy.list
+        sudo apt-get update
+        
+        # Download the packages without installing to avoid dependency conflicts on 24.04
+        mkdir -p jammy_debs && cd jammy_debs
+        sudo apt-get download python2 python2-minimal python2.7 python2.7-minimal libpython2.7-stdlib libpython2.7-minimal libncurses5 libtinfo5
+        
+        # Force install them ignoring dependencies (base system has newer libc6 anyway)
+        sudo dpkg --force-all -i *.deb
+        sudo ln -sf /usr/bin/python2 /usr/bin/python
+        
+        # Cleanup
+        sudo rm /etc/apt/sources.list.d/jammy.list
+        sudo apt-get update
+
+    - name: Building recovery
+      run: |
+        export BUILD_USERNAME=${GITHUB_ACTOR}
+        export BUILD_HOSTNAME=exynos3475
+        export ALLOW_MISSING_DEPENDENCIES=true
+        source build/envsetup.sh
+        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && mka ${{ github.event.inputs.BUILD_TARGET }}image
+        tar -H ustar -c -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.FILE_NAME }}.tar -C out/target/product/${{ github.event.inputs.DEVICE_NAME }} ${{ github.event.inputs.BUILD_TARGET }}.img
+        mv out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.FILE_NAME }}.img
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: | 
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.FILE_NAME }}.img
+          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.FILE_NAME }}.tar
+        name: ${{ github.event.inputs.NAME }}
+        tag_name: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}_${{ steps.buildtree.outputs.date }}
+        body: |
+          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          Device: ${{ github.event.inputs.DEVICE_NAME }}
+          Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
